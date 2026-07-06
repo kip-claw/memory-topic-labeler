@@ -110,14 +110,29 @@ LABEL_ALIASES: dict[str, tuple[str, str]] = {
     "ui": ("Frontend", "Svelte UI and page composition"),
 }
 
-OUTLIER_REASSIGN_MIN_SIM = 0.32
 MIN_DOC_LEN = 20
+
+
+@dataclass
+class Cluster:
+    id: int
+    label: str
+    description: str
+    size: int
+    keywords: list[str]
 
 
 def normalize_term(term: str) -> str:
     value = term.replace("_", " ").strip()
     value = re.sub(r"\s+", " ", value)
     return value
+
+
+def family_label(label: str) -> str:
+    match = re.match(r"^(.*?)(\d+)$", label.strip())
+    if not match:
+        return label.strip()
+    return match.group(1).strip() or label.strip()
 
 
 def term_is_good_label(term: str) -> bool:
@@ -133,16 +148,44 @@ def term_is_good_label(term: str) -> bool:
     return True
 
 
-def canonical_label(words: list[str], fallback_label: str, fallback_desc: str) -> tuple[str, str]:
-    terms = [normalize_term(w).lower() for w in words]
-    probe = [normalize_term(fallback_label).lower(), *terms]
-    for token in probe:
-        if token in LABEL_ALIASES:
-            return LABEL_ALIASES[token]
-        first = token.split(" ", 1)[0]
-        if first in LABEL_ALIASES:
-            return LABEL_ALIASES[first]
+def canonical_label(fallback_label: str, fallback_desc: str) -> tuple[str, str]:
+    token = normalize_term(fallback_label).lower()
+    if token in LABEL_ALIASES:
+        return LABEL_ALIASES[token]
+    first = token.split(" ", 1)[0]
+    if first in LABEL_ALIASES:
+        return LABEL_ALIASES[first]
     return fallback_label, fallback_desc
+
+
+def plain_description(label: str, description: str, keywords: list[str]) -> str:
+    mapped = {
+        "Automation": "Scheduled and automated jobs, including routine monitoring tasks.",
+        "Execution State": "Progress and confidence signals about in-flight work and staging.",
+        "Operational State": "System health, run status, and operational evidence from recent activity.",
+        "Dialogue": "User and assistant planning conversations, requests, and responses.",
+        "Session": "Session metadata and timing context tied to recent interactions.",
+        "Disk": "Disk capacity and storage health checks across the system.",
+        "Vault": "Knowledge captured from the Obsidian vault, including notes and wiki content.",
+        "Todo": "Task planning, follow-up items, and backlog-style reminders.",
+        "Build": "Build, test, and validation activity from development workflows.",
+        "Truths": "Recurring long-term patterns and distilled durable insights.",
+        "Candidates": "Potential items being considered for follow-up or promotion.",
+        "Action Planning": "Next actions and decision-oriented planning notes.",
+    }
+    if label in mapped:
+        return mapped[label]
+
+    if "," in description and not re.search(r"\b(is|are|includes|contains|covers|focuses)\b", description.lower()):
+        terms = [k.strip() for k in keywords if k.strip()][:3]
+        if terms:
+            return f"Topics related to {', '.join(terms)}."
+        return "Related conversational and operational topics from memory activity."
+
+    cleaned = description.strip().rstrip(".")
+    if not cleaned:
+        return "Related conversational and operational topics from memory activity."
+    return f"{cleaned}."
 
 
 def choose_label_and_description(words: list[str], topic_id: int) -> tuple[str, str]:
@@ -151,16 +194,8 @@ def choose_label_and_description(words: list[str], topic_id: int) -> tuple[str, 
     label = (good[0] if good else (cleaned[0] if cleaned else f"Topic{topic_id}")).title()
     desc_terms = [w.title() for w in good[1:4]]
     description = ", ".join(desc_terms) if desc_terms else "General themes"
-    return canonical_label(cleaned, label, description)
-
-
-@dataclass
-class Cluster:
-    id: int
-    label: str
-    description: str
-    size: int
-    keywords: list[str]
+    label, description = canonical_label(label, description)
+    return label, plain_description(label, description, cleaned)
 
 
 def is_cron_sender_chunk(text: str) -> bool:
@@ -186,8 +221,8 @@ def build_topic_model() -> BERTopic:
         vectorizer_model=vectorizer,
         umap_model=UMAP(n_neighbors=18, min_dist=0.03, metric="cosine", random_state=42),
         calculate_probabilities=False,
-        nr_topics=10,
-        min_topic_size=14,
+        nr_topics=None,
+        min_topic_size=8,
         top_n_words=8,
         verbose=False,
     )
@@ -215,80 +250,64 @@ def fit_topics(docs: list[str], embeddings: np.ndarray) -> tuple[BERTopic, list[
         return fallback, [int(t) for t in topics]
 
 
-def normalize_rows(values: np.ndarray) -> np.ndarray:
-    denom = np.linalg.norm(values, axis=1, keepdims=True)
-    denom[denom == 0.0] = 1.0
-    return values / denom
-
-
-def reduce_outliers(topics: list[int], embeddings: np.ndarray) -> list[int]:
-    topic_arr = np.array(topics, dtype=np.int32)
-    outlier_idx = np.where(topic_arr == -1)[0]
-    if outlier_idx.size == 0:
+def bertopic_reduce_outliers(topic_model: BERTopic, docs: list[str], topics: list[int], embeddings: np.ndarray) -> list[int]:
+    if not any(t == -1 for t in topics):
+        return topics
+    try:
+        reduced = topic_model.reduce_outliers(docs, topics, strategy="embeddings", embeddings=embeddings)
+        return [int(t) for t in reduced]
+    except Exception:
         return topics
 
-    non_outlier_labels = sorted({int(t) for t in topic_arr.tolist() if int(t) != -1})
-    if len(non_outlier_labels) < 2:
-        return topics
 
-    centroids: list[np.ndarray] = []
-    labels: list[int] = []
-    for label in non_outlier_labels:
-        mask = topic_arr == label
-        if int(mask.sum()) < 4:
-            continue
-        centroids.append(embeddings[mask].mean(axis=0))
-        labels.append(label)
-
-    if not centroids:
-        return topics
-
-    centroid_mat = normalize_rows(np.stack(centroids))
-    emb_norm = normalize_rows(embeddings)
-
-    for idx in outlier_idx.tolist():
-        sims = centroid_mat @ emb_norm[idx]
-        best = int(np.argmax(sims))
-        if float(sims[best]) >= OUTLIER_REASSIGN_MIN_SIM:
-            topic_arr[idx] = labels[best]
-
-    return [int(t) for t in topic_arr.tolist()]
-
-
-def merge_cluster_families(clusters: list[Cluster]) -> tuple[list[Cluster], dict[int, int]]:
-    grouped: dict[str, list[Cluster]] = defaultdict(list)
-    remap: dict[int, int] = {}
-
+def build_hierarchy(clusters: list[Cluster]) -> dict[str, Any]:
+    families: dict[str, list[Cluster]] = defaultdict(list)
     for cluster in clusters:
-        grouped[cluster.label].append(cluster)
+        families[family_label(cluster.label)].append(cluster)
 
-    merged: list[Cluster] = []
-    for label, members in grouped.items():
-        if label == "Outlier":
-            outlier = members[0]
-            merged.append(outlier)
-            remap[outlier.id] = outlier.id
-            continue
+    family_nodes: list[dict[str, Any]] = []
+    for family_name, members in sorted(families.items(), key=lambda kv: sum(c.size for c in kv[1]), reverse=True):
+        topic_nodes: list[dict[str, Any]] = []
+        for cluster in sorted(members, key=lambda c: c.size, reverse=True):
+            kw = [k for k in cluster.keywords if k][:5]
+            if not kw:
+                kw = ["core"]
+            weights = [len(kw) - i for i in range(len(kw))]
+            total = sum(weights)
+            keyword_nodes = [
+                {
+                    "id": f"keyword:{cluster.id}:{i}",
+                    "label": keyword,
+                    "value": max(1, round(cluster.size * (weights[i] / total), 2)),
+                }
+                for i, keyword in enumerate(kw)
+            ]
+            topic_nodes.append(
+                {
+                    "id": f"cluster:{cluster.id}",
+                    "clusterId": cluster.id,
+                    "label": cluster.label,
+                    "description": cluster.description,
+                    "value": cluster.size,
+                    "children": keyword_nodes,
+                }
+            )
 
-        merged_id = min(member.id for member in members)
-        total_size = sum(member.size for member in members)
-        desc = Counter(member.description for member in members).most_common(1)[0][0]
+        family_nodes.append(
+            {
+                "id": f"family:{family_name.lower().replace(' ', '-')}",
+                "label": family_name,
+                "value": sum(float(m.get("value", 0)) for m in topic_nodes),
+                "children": topic_nodes,
+            }
+        )
 
-        kw_counter: Counter[str] = Counter()
-        for member in members:
-            for kw in member.keywords:
-                key = normalize_term(kw).lower()
-                if key:
-                    kw_counter[key] += 1
-
-        keywords = [key for key, _ in kw_counter.most_common(8)]
-        merged.append(Cluster(id=merged_id, label=label, description=desc, size=total_size, keywords=keywords))
-
-        for member in members:
-            remap[member.id] = merged_id
-
-    merged.sort(key=lambda c: c.size, reverse=True)
-    return merged, remap
+    return {
+        "id": "root",
+        "label": "Memory",
+        "value": sum(c.size for c in clusters),
+        "children": family_nodes,
+    }
 
 
 def main() -> int:
@@ -335,13 +354,14 @@ def main() -> int:
     if not records:
         payload = {
             "timestamp": args.timestamp,
-            "method": "bertopic+umap+ctfidf+stable-labels+outlier-reassign+family-merge",
+            "method": "bertopic+umap+ctfidf+bertopic-outlier-reduction+hierarchy-v3",
             "pointCount": 0,
             "clusterCount": 0,
             "excludedCronChunks": excluded_cron_chunks,
             "excludedShortChunks": excluded_short_chunks,
             "clusters": [],
             "points": [],
+            "tree": {"id": "root", "label": "Memory", "value": 0, "children": []},
         }
     else:
         if len(records) > args.max_points:
@@ -353,54 +373,73 @@ def main() -> int:
         embeddings = np.stack([r["embedding"] for r in records])
 
         topic_model, topics = fit_topics(docs, embeddings)
-        topics = reduce_outliers(topics, embeddings)
+        topics = bertopic_reduce_outliers(topic_model, docs, topics, embeddings)
+
+        topic_counts = Counter(topics)
+        finalized_clusters: list[Cluster] = []
+
+        for topic_id, size in sorted(topic_counts.items(), key=lambda kv: kv[1], reverse=True):
+            if topic_id == -1:
+                continue
+            terms = topic_model.get_topic(topic_id) or []
+            words = [term for term, _ in terms[:8]]
+            label, description = choose_label_and_description(words, topic_id)
+            keywords = [normalize_term(w) for w in words]
+            finalized_clusters.append(
+                Cluster(id=int(topic_id), label=label, description=description, size=int(size), keywords=keywords)
+            )
+
+        # Keep Vault/Todo discoverability as dedicated labels when path evidence is strong.
+        vault_count = sum(1 for record in records if "obsidian-vault" in record["path"].lower())
+        todo_count = sum(1 for record in records if "todo" in record["path"].lower() or "/tasks/" in record["path"].lower())
+        if vault_count >= 8 and not any(c.label == "Vault" for c in finalized_clusters):
+            finalized_clusters.append(
+                Cluster(
+                    id=9001,
+                    label="Vault",
+                    description=plain_description("Vault", "Vault notes and knowledge capture", ["vault", "notes", "wiki"]),
+                    size=vault_count,
+                    keywords=["vault", "notes", "wiki"],
+                )
+            )
+        if todo_count >= 8 and not any(c.label == "Todo" for c in finalized_clusters):
+            finalized_clusters.append(
+                Cluster(
+                    id=9002,
+                    label="Todo",
+                    description=plain_description("Todo", "Task tracking and follow-up items", ["todo", "tasks", "follow-up"]),
+                    size=todo_count,
+                    keywords=["todo", "tasks", "follow-up"],
+                )
+            )
+
+        finalized_clusters.sort(key=lambda c: c.size, reverse=True)
+
+        cluster_ids = {cluster.id for cluster in finalized_clusters}
+        points_clusters = [int(topic) if int(topic) in cluster_ids else 0 for topic in topics]
 
         umap_model = UMAP(n_neighbors=15, min_dist=0.08, metric="cosine", random_state=42)
         coords = umap_model.fit_transform(embeddings)
 
-        topic_counts = Counter(topics)
-        raw_clusters: list[Cluster] = []
-
-        for topic_id, size in sorted(topic_counts.items(), key=lambda kv: kv[1], reverse=True):
-            if topic_id == -1:
-                label = "Outlier"
-                description = "Unclustered fragments"
-                keywords = ["outlier"]
-            else:
-                terms = topic_model.get_topic(topic_id) or []
-                words = [term for term, _ in terms[:8]]
-                label, description = choose_label_and_description(words, topic_id)
-                keywords = [normalize_term(w) for w in words]
-            raw_clusters.append(
-                Cluster(
-                    id=int(topic_id),
-                    label=label,
-                    description=description,
-                    size=int(size),
-                    keywords=keywords,
-                )
-            )
-
-        clusters, topic_remap = merge_cluster_families(raw_clusters)
-
         payload = {
             "timestamp": args.timestamp,
-            "method": "bertopic+umap+ctfidf+stable-labels+outlier-reassign+family-merge",
+            "method": "bertopic+umap+ctfidf+bertopic-outlier-reduction+hierarchy-v3",
             "pointCount": len(records),
-            "clusterCount": len(clusters),
+            "clusterCount": len(finalized_clusters),
             "excludedCronChunks": excluded_cron_chunks,
             "excludedShortChunks": excluded_short_chunks,
-            "clusters": [asdict(c) for c in clusters],
+            "clusters": [asdict(c) for c in finalized_clusters],
             "points": [
                 {
                     "x": round(float(coords[i][0]), 4),
                     "y": round(float(coords[i][1]), 4),
-                    "cluster": int(topic_remap.get(int(topics[i]), int(topics[i]))),
+                    "cluster": int(points_clusters[i]),
                     "path": records[i]["path"],
                     "source": records[i]["source"],
                 }
                 for i in range(len(records))
             ],
+            "tree": build_hierarchy(finalized_clusters),
         }
 
     if args.output == "-":
