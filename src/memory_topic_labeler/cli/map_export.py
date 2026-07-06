@@ -135,6 +135,21 @@ FAMILY_ALIASES: dict[str, str] = {
     "assistant": "Planning & Dialogue",
 }
 
+LABEL_SUFFIX_BLACKLIST = {
+    "assistant",
+    "automation",
+    "candidate",
+    "candidates",
+    "cluster",
+    "command",
+    "health",
+    "memory",
+    "openclaw",
+    "session",
+    "status",
+    "topic",
+}
+
 MIN_DOC_LEN = 20
 
 
@@ -252,17 +267,27 @@ def uniquify_cluster_labels(clusters: list[Cluster]) -> list[Cluster]:
     for cluster in clusters:
         label_seen[cluster.label] += 1
         if label_counts[cluster.label] <= 1:
+            used_labels.add(cluster.label)
             out.append(cluster)
             continue
 
         suffix = ""
+        label_tokens = {t for t in re.split(r"[^a-z0-9]+", cluster.label.lower()) if t}
         for keyword in cluster.keywords:
             k = normalize_term(keyword)
             if not k:
                 continue
-            if k.lower() != cluster.label.lower():
-                suffix = k.title()
-                break
+            k_lower = k.lower()
+            if k_lower == cluster.label.lower():
+                continue
+            if not term_is_good_label(k):
+                continue
+            if k_lower in LABEL_SUFFIX_BLACKLIST:
+                continue
+            if k_lower in label_tokens:
+                continue
+            suffix = k.title()
+            break
         if not suffix:
             suffix = f"Topic {label_seen[cluster.label]}"
 
@@ -383,7 +408,6 @@ def build_hierarchy(clusters: list[Cluster]) -> dict[str, Any]:
                     "clusterId": cluster.id,
                     "label": cluster.label,
                     "description": cluster.description,
-                    "value": cluster.size,
                     "children": keyword_nodes,
                 }
             )
@@ -392,7 +416,6 @@ def build_hierarchy(clusters: list[Cluster]) -> dict[str, Any]:
             {
                 "id": f"family:{family_name.lower().replace(' ', '-')}",
                 "label": family_name,
-                "value": sum(float(m.get("value", 0)) for m in topic_nodes),
                 "children": topic_nodes,
             }
         )
@@ -400,7 +423,6 @@ def build_hierarchy(clusters: list[Cluster]) -> dict[str, Any]:
     return {
         "id": "root",
         "label": "Memory",
-        "value": sum(c.size for c in clusters),
         "children": family_nodes,
     }
 
