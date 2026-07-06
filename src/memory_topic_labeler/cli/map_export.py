@@ -10,6 +10,7 @@ from typing import Any
 
 import numpy as np
 from bertopic import BERTopic
+from bertopic.representation import KeyBERTInspired, MaximalMarginalRelevance
 from bertopic.vectorizers import ClassTfidfTransformer
 from sklearn.feature_extraction.text import CountVectorizer, ENGLISH_STOP_WORDS
 from umap import UMAP
@@ -356,10 +357,15 @@ def build_topic_model() -> BERTopic:
         min_df=2,
         token_pattern=r"(?u)\\b[a-zA-Z][a-zA-Z\\-]{1,}\\b",
     )
-    ctfidf = ClassTfidfTransformer(reduce_frequent_words=True)
+    ctfidf = ClassTfidfTransformer(bm25_weighting=True, reduce_frequent_words=True)
+    representation = {
+        "Main": KeyBERTInspired(top_n_words=8),
+        "Diverse": MaximalMarginalRelevance(diversity=0.35),
+    }
     return BERTopic(
         vectorizer_model=vectorizer,
         ctfidf_model=ctfidf,
+        representation_model=representation,
         umap_model=UMAP(n_neighbors=18, min_dist=0.03, metric="cosine", random_state=42),
         calculate_probabilities=False,
         nr_topics=None,
