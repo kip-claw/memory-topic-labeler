@@ -368,7 +368,7 @@ def build_topic_model() -> BERTopic:
         representation_model=representation,
         umap_model=UMAP(n_neighbors=18, min_dist=0.03, metric="cosine", random_state=42),
         calculate_probabilities=False,
-        nr_topics=None,
+        nr_topics="auto",
         min_topic_size=8,
         top_n_words=8,
         verbose=False,
