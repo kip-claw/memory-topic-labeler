@@ -163,6 +163,18 @@ LABEL_SUFFIX_BLACKLIST = {
     "topic",
 }
 
+KEYWORD_BLACKLIST = LABEL_SUFFIX_BLACKLIST.union(
+    {
+        "and",
+        "if",
+        "ran",
+        "the",
+        "to",
+        "user",
+        "you",
+    }
+)
+
 MIN_DOC_LEN = 20
 
 
@@ -249,6 +261,50 @@ def choose_label_and_description(words: list[str], topic_id: int) -> tuple[str, 
     description = ", ".join(desc_terms) if desc_terms else "General themes"
     label, description = canonical_label(label, description)
     return label, plain_description(label, description, cleaned)
+
+
+def choose_display_keywords(words: list[str], label: str, limit: int = 8) -> list[str]:
+    selected: list[str] = []
+    seen: set[str] = set()
+    label_tokens = {t for t in re.split(r"[^a-z0-9]+", label.lower()) if t}
+
+    for raw in words:
+        k = normalize_term(raw)
+        if not k:
+            continue
+        k_lower = k.lower()
+        if k_lower in seen:
+            continue
+        if k_lower in KEYWORD_BLACKLIST:
+            continue
+        if not term_is_good_label(k):
+            continue
+        if k_lower in label_tokens:
+            continue
+        seen.add(k_lower)
+        selected.append(k)
+        if len(selected) >= limit:
+            break
+
+    if selected:
+        return selected
+
+    # Fallback: preserve some signal even if everything was filtered.
+    for raw in words:
+        k = normalize_term(raw)
+        if not k:
+            continue
+        k_lower = k.lower()
+        if k_lower in seen:
+            continue
+        if k_lower in label_tokens:
+            continue
+        seen.add(k_lower)
+        selected.append(k)
+        if len(selected) >= min(3, limit):
+            break
+
+    return selected or ["core"]
 
 
 def infer_family_name(cluster: Cluster) -> str:
@@ -528,7 +584,7 @@ def main() -> int:
             terms = topic_model.get_topic(topic_id) or []
             words = [term for term, _ in terms[:8]]
             label, description = choose_label_and_description(words, topic_id)
-            keywords = [normalize_term(w) for w in words]
+            keywords = choose_display_keywords(words, label, limit=8)
             finalized_clusters.append(
                 Cluster(id=int(topic_id), label=label, description=description, size=int(size), keywords=keywords)
             )
