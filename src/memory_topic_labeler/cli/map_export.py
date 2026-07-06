@@ -98,6 +98,8 @@ LABEL_ALIASES: dict[str, tuple[str, str]] = {
     "scheduler": ("Automation", "Scheduled tasks and cron operations"),
     "openclaw": ("OpenClaw", "OpenClaw operations and tooling"),
     "agent": ("Agents", "Agent behavior and execution flow"),
+    "assistant": ("Collaboration", "Assistant-led workflows, responses, and execution support"),
+    "candidate": ("Candidates", "Potential items being considered for follow-up or promotion"),
     "memory": ("Memory", "Memory indexing and retrieval pipeline"),
     "todo": ("Todo", "Task tracking and follow-up items"),
     "tasks": ("Todo", "Task tracking and follow-up items"),
@@ -108,6 +110,10 @@ LABEL_ALIASES: dict[str, tuple[str, str]] = {
     "tailnet": ("Remote Ops", "Remote execution and host orchestration"),
     "svelte": ("Frontend", "Svelte UI and page composition"),
     "ui": ("Frontend", "Svelte UI and page composition"),
+    "continue": ("Follow-up", "Ongoing follow-up work and continuation of active tasks"),
+    "done": ("Completion", "Completed tasks and finalized follow-through"),
+    "alert": ("Alerting", "Operational alerting signals and notification events"),
+    "health": ("System Health", "Health checks, diagnostics, and reliability monitoring"),
 }
 
 FAMILY_ALIASES: dict[str, str] = {
@@ -118,8 +124,12 @@ FAMILY_ALIASES: dict[str, str] = {
     "truths": "Planning & Dialogue",
     "candidates": "Planning & Dialogue",
     "action planning": "Planning & Dialogue",
+    "collaboration": "Planning & Dialogue",
+    "follow-up": "Planning & Dialogue",
+    "completion": "Planning & Dialogue",
     "automation": "Operations",
     "command": "Operations",
+    "alerting": "Operations",
     "build": "Operations",
     "publishing": "Operations",
     "sync": "Operations",
@@ -132,6 +142,7 @@ FAMILY_ALIASES: dict[str, str] = {
     "disk": "Infrastructure",
     "remote ops": "Infrastructure",
     "health": "Infrastructure",
+    "system health": "Infrastructure",
     "assistant": "Planning & Dialogue",
 }
 
@@ -296,6 +307,13 @@ def uniquify_cluster_labels(clusters: list[Cluster]) -> list[Cluster]:
             for keyword in cluster.keywords:
                 k = normalize_term(keyword)
                 if not k:
+                    continue
+                k_lower = k.lower()
+                if not term_is_good_label(k):
+                    continue
+                if k_lower in LABEL_SUFFIX_BLACKLIST:
+                    continue
+                if k_lower in label_tokens:
                     continue
                 candidate_alt = f"{cluster.label}: {k.title()}"
                 if candidate_alt not in used_labels:
