@@ -307,6 +307,22 @@ def choose_display_keywords(words: list[str], label: str, limit: int = 8) -> lis
     return selected or ["core"]
 
 
+def is_good_keyword_for_suffix(keyword: str, cluster_label: str, label_tokens: set[str]) -> bool:
+    k = normalize_term(keyword)
+    if not k:
+        return False
+    k_lower = k.lower()
+    if k_lower == cluster_label.lower():
+        return False
+    if not term_is_good_label(k):
+        return False
+    if k_lower in LABEL_SUFFIX_BLACKLIST:
+        return False
+    if k_lower in label_tokens:
+        return False
+    return True
+
+
 def infer_family_name(cluster: Cluster) -> str:
     label_key = normalize_term(cluster.label).lower()
     if label_key in FAMILY_ALIASES:
@@ -343,19 +359,9 @@ def uniquify_cluster_labels(clusters: list[Cluster]) -> list[Cluster]:
         suffix = ""
         label_tokens = {t for t in re.split(r"[^a-z0-9]+", cluster.label.lower()) if t}
         for keyword in cluster.keywords:
-            k = normalize_term(keyword)
-            if not k:
+            if not is_good_keyword_for_suffix(keyword, cluster.label, label_tokens):
                 continue
-            k_lower = k.lower()
-            if k_lower == cluster.label.lower():
-                continue
-            if not term_is_good_label(k):
-                continue
-            if k_lower in LABEL_SUFFIX_BLACKLIST:
-                continue
-            if k_lower in label_tokens:
-                continue
-            suffix = k.title()
+            suffix = normalize_term(keyword).title()
             break
         if not suffix:
             suffix = f"Topic {label_seen[cluster.label]}"
@@ -363,17 +369,9 @@ def uniquify_cluster_labels(clusters: list[Cluster]) -> list[Cluster]:
         candidate = f"{cluster.label}: {suffix}"
         if candidate in used_labels:
             for keyword in cluster.keywords:
-                k = normalize_term(keyword)
-                if not k:
+                if not is_good_keyword_for_suffix(keyword, cluster.label, label_tokens):
                     continue
-                k_lower = k.lower()
-                if not term_is_good_label(k):
-                    continue
-                if k_lower in LABEL_SUFFIX_BLACKLIST:
-                    continue
-                if k_lower in label_tokens:
-                    continue
-                candidate_alt = f"{cluster.label}: {k.title()}"
+                candidate_alt = f"{cluster.label}: {normalize_term(keyword).title()}"
                 if candidate_alt not in used_labels:
                     candidate = candidate_alt
                     break
@@ -554,7 +552,7 @@ def main() -> int:
     if not records:
         payload = {
             "timestamp": args.timestamp,
-            "method": "bertopic+umap+ctfidf+bertopic-outlier-reduction+hierarchy-v3",
+            "method": "bertopic+umap+hdbscan+ctfidf-bm25+reduce-frequent-words+representation+auto-reduction+outlier-reduction+hierarchy-v3",
             "pointCount": 0,
             "clusterCount": 0,
             "excludedCronChunks": excluded_cron_chunks,
@@ -624,7 +622,7 @@ def main() -> int:
 
         payload = {
             "timestamp": args.timestamp,
-            "method": "bertopic+umap+ctfidf+bertopic-outlier-reduction+hierarchy-v3",
+            "method": "bertopic+umap+hdbscan+ctfidf-bm25+reduce-frequent-words+representation+auto-reduction+outlier-reduction+hierarchy-v3",
             "pointCount": len(records),
             "clusterCount": len(finalized_clusters),
             "excludedCronChunks": excluded_cron_chunks,
