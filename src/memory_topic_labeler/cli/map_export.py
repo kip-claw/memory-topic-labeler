@@ -10,6 +10,7 @@ from typing import Any
 
 import numpy as np
 from bertopic import BERTopic
+from bertopic.vectorizers import ClassTfidfTransformer
 from sklearn.feature_extraction.text import CountVectorizer, ENGLISH_STOP_WORDS
 from umap import UMAP
 
@@ -355,8 +356,10 @@ def build_topic_model() -> BERTopic:
         min_df=2,
         token_pattern=r"(?u)\\b[a-zA-Z][a-zA-Z\\-]{1,}\\b",
     )
+    ctfidf = ClassTfidfTransformer(reduce_frequent_words=True)
     return BERTopic(
         vectorizer_model=vectorizer,
+        ctfidf_model=ctfidf,
         umap_model=UMAP(n_neighbors=18, min_dist=0.03, metric="cosine", random_state=42),
         calculate_probabilities=False,
         nr_topics=None,
