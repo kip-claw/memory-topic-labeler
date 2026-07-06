@@ -336,10 +336,10 @@ def infer_family_name(cluster: Cluster) -> str:
     fallback = family_label(cluster.label)
     fallback = re.sub(r"[:\-\s]+$", "", fallback).strip()
     if not fallback:
-        return "General Topics"
+        return "Workflow Signals"
     fallback_lower = fallback.lower()
     if fallback_lower == label_key or label_key.startswith(f"{fallback_lower}:"):
-        return "General Topics"
+        return "Workflow Signals"
     return fallback
 
 
@@ -366,17 +366,17 @@ def uniquify_cluster_labels(clusters: list[Cluster]) -> list[Cluster]:
         if not suffix:
             suffix = f"Topic {label_seen[cluster.label]}"
 
-        candidate = f"{cluster.label}: {suffix}"
+        candidate = f"{cluster.label} ({suffix})"
         if candidate in used_labels:
             for keyword in cluster.keywords:
                 if not is_good_keyword_for_suffix(keyword, cluster.label, label_tokens):
                     continue
-                candidate_alt = f"{cluster.label}: {normalize_term(keyword).title()}"
+                candidate_alt = f"{cluster.label} ({normalize_term(keyword).title()})"
                 if candidate_alt not in used_labels:
                     candidate = candidate_alt
                     break
         if candidate in used_labels:
-            candidate = f"{cluster.label}: Topic {label_seen[cluster.label]}"
+            candidate = f"{cluster.label} (Topic {label_seen[cluster.label]})"
 
         used_labels.add(candidate)
         out.append(
