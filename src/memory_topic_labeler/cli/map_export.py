@@ -110,6 +110,31 @@ LABEL_ALIASES: dict[str, tuple[str, str]] = {
     "ui": ("Frontend", "Svelte UI and page composition"),
 }
 
+FAMILY_ALIASES: dict[str, str] = {
+    "dialogue": "Planning & Dialogue",
+    "execution state": "Planning & Dialogue",
+    "operational state": "Planning & Dialogue",
+    "session": "Planning & Dialogue",
+    "truths": "Planning & Dialogue",
+    "candidates": "Planning & Dialogue",
+    "action planning": "Planning & Dialogue",
+    "automation": "Operations",
+    "command": "Operations",
+    "build": "Operations",
+    "publishing": "Operations",
+    "sync": "Operations",
+    "chartbeat": "Operations",
+    "charts": "Operations",
+    "vault": "Knowledge",
+    "todo": "Knowledge",
+    "memory": "Knowledge",
+    "storage": "Infrastructure",
+    "disk": "Infrastructure",
+    "remote ops": "Infrastructure",
+    "health": "Infrastructure",
+    "assistant": "Planning & Dialogue",
+}
+
 MIN_DOC_LEN = 20
 
 
@@ -198,6 +223,76 @@ def choose_label_and_description(words: list[str], topic_id: int) -> tuple[str, 
     return label, plain_description(label, description, cleaned)
 
 
+def infer_family_name(cluster: Cluster) -> str:
+    label_key = normalize_term(cluster.label).lower()
+    if label_key in FAMILY_ALIASES:
+        return FAMILY_ALIASES[label_key]
+
+    for keyword in cluster.keywords:
+        key = normalize_term(keyword).lower()
+        if key in FAMILY_ALIASES:
+            return FAMILY_ALIASES[key]
+
+    fallback = family_label(cluster.label)
+    fallback = re.sub(r"[:\-\s]+$", "", fallback).strip()
+    if not fallback:
+        return "General Topics"
+    fallback_lower = fallback.lower()
+    if fallback_lower == label_key or label_key.startswith(f"{fallback_lower}:"):
+        return "General Topics"
+    return fallback
+
+
+def uniquify_cluster_labels(clusters: list[Cluster]) -> list[Cluster]:
+    label_counts = Counter(c.label for c in clusters)
+    label_seen: dict[str, int] = defaultdict(int)
+    used_labels: set[str] = set()
+    out: list[Cluster] = []
+
+    for cluster in clusters:
+        label_seen[cluster.label] += 1
+        if label_counts[cluster.label] <= 1:
+            out.append(cluster)
+            continue
+
+        suffix = ""
+        for keyword in cluster.keywords:
+            k = normalize_term(keyword)
+            if not k:
+                continue
+            if k.lower() != cluster.label.lower():
+                suffix = k.title()
+                break
+        if not suffix:
+            suffix = f"Topic {label_seen[cluster.label]}"
+
+        candidate = f"{cluster.label}: {suffix}"
+        if candidate in used_labels:
+            for keyword in cluster.keywords:
+                k = normalize_term(keyword)
+                if not k:
+                    continue
+                candidate_alt = f"{cluster.label}: {k.title()}"
+                if candidate_alt not in used_labels:
+                    candidate = candidate_alt
+                    break
+        if candidate in used_labels:
+            candidate = f"{cluster.label}: Topic {label_seen[cluster.label]}"
+
+        used_labels.add(candidate)
+        out.append(
+            Cluster(
+                id=cluster.id,
+                label=candidate,
+                description=cluster.description,
+                size=cluster.size,
+                keywords=cluster.keywords,
+            )
+        )
+
+    return out
+
+
 def is_cron_sender_chunk(text: str) -> bool:
     return any(p.search(text) for p in CRON_SENDER_PATTERNS)
 
@@ -263,7 +358,7 @@ def bertopic_reduce_outliers(topic_model: BERTopic, docs: list[str], topics: lis
 def build_hierarchy(clusters: list[Cluster]) -> dict[str, Any]:
     families: dict[str, list[Cluster]] = defaultdict(list)
     for cluster in clusters:
-        families[family_label(cluster.label)].append(cluster)
+        families[infer_family_name(cluster)].append(cluster)
 
     family_nodes: list[dict[str, Any]] = []
     for family_name, members in sorted(families.items(), key=lambda kv: sum(c.size for c in kv[1]), reverse=True):
@@ -413,6 +508,7 @@ def main() -> int:
                 )
             )
 
+        finalized_clusters = uniquify_cluster_labels(finalized_clusters)
         finalized_clusters.sort(key=lambda c: c.size, reverse=True)
 
         cluster_ids = {cluster.id for cluster in finalized_clusters}
