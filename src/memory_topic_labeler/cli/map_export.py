@@ -516,6 +516,7 @@ def build_hierarchy(clusters: list[Cluster]) -> dict[str, Any]:
                     "clusterId": cluster.id,
                     "label": cluster.label,
                     "description": cluster.description,
+                    "value": cluster.size,
                     "children": keyword_nodes,
                 }
             )
@@ -524,6 +525,7 @@ def build_hierarchy(clusters: list[Cluster]) -> dict[str, Any]:
             {
                 "id": f"family:{family_name.lower().replace(' ', '-')}",
                 "label": family_name,
+                "value": sum(cluster.size for cluster in members),
                 "children": topic_nodes,
             }
         )

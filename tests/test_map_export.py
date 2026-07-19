@@ -26,3 +26,5 @@ def test_hierarchy_root_has_a_value_for_stats_consumers() -> None:
     )
 
     assert tree["value"] == 7
+    assert tree["children"][0]["value"] == 7
+    assert tree["children"][0]["children"][0]["value"] == 7
