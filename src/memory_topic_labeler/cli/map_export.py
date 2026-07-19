@@ -531,6 +531,7 @@ def build_hierarchy(clusters: list[Cluster]) -> dict[str, Any]:
     return {
         "id": "root",
         "label": "Memory",
+        "value": sum(cluster.size for cluster in clusters),
         "children": family_nodes,
     }
 
