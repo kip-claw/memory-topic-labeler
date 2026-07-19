@@ -75,8 +75,31 @@ BAD_LABEL_TERMS = {
     "from",
     "with",
     "user",
+    "you",
     "can",
+    # Personal pronouns and demonstratives are frequent in conversational
+    # memory but do not describe a topic. Keep possessive forms here too:
+    # BERTopic may surface `your` even when `you` is suppressed.
+    "your",
+    "yours",
+    "our",
+    "ours",
+    "their",
+    "theirs",
+    "its",
+    "this",
+    "that",
+    "these",
+    "those",
 }
+
+# Dreaming files contain synthetic candidate summaries and conversational
+# scaffolding. They are useful to the recall system but should not dominate a
+# public-facing map of durable working memory.
+EXCLUDED_MEMORY_PATH_PREFIXES = (
+    "memory/dreaming/",
+    "memory/.dreams/",
+)
 
 LABEL_ALIASES: dict[str, tuple[str, str]] = {
     "you": ("Dialogue", "User-assistant dialogue and planning"),
@@ -211,6 +234,10 @@ def term_is_good_label(term: str) -> bool:
     if not re.search(r"[a-z]", lower):
         return False
     return True
+
+
+def is_excluded_memory_path(path: str) -> bool:
+    return path.replace("\\", "/").lower().startswith(EXCLUDED_MEMORY_PATH_PREFIXES)
 
 
 def canonical_label(fallback_label: str, fallback_desc: str) -> tuple[str, str]:
@@ -524,7 +551,12 @@ def main() -> int:
     records: list[dict[str, Any]] = []
     excluded_cron_chunks = 0
     excluded_short_chunks = 0
+    excluded_dreaming_chunks = 0
     for chunk_id, path, source, text, embedding_json in rows:
+        path_value = str(path or "")
+        if is_excluded_memory_path(path_value):
+            excluded_dreaming_chunks += 1
+            continue
         raw_text = str(text or "")
         if is_cron_sender_chunk(raw_text):
             excluded_cron_chunks += 1
@@ -542,7 +574,7 @@ def main() -> int:
         records.append(
             {
                 "chunkId": str(chunk_id),
-                "path": str(path or ""),
+                "path": path_value,
                 "source": str(source or ""),
                 "text": cleaned,
                 "embedding": embedding,
@@ -552,11 +584,12 @@ def main() -> int:
     if not records:
         payload = {
             "timestamp": args.timestamp,
-            "method": "bertopic+umap+hdbscan+ctfidf-bm25+reduce-frequent-words+representation+auto-reduction+outlier-reduction+hierarchy-v3",
+            "method": "bertopic+umap+hdbscan+ctfidf-bm25+reduce-frequent-words+representation+auto-reduction+outlier-reduction+hierarchy-v4",
             "pointCount": 0,
             "clusterCount": 0,
             "excludedCronChunks": excluded_cron_chunks,
             "excludedShortChunks": excluded_short_chunks,
+            "excludedDreamingChunks": excluded_dreaming_chunks,
             "clusters": [],
             "points": [],
             "tree": {"id": "root", "label": "Memory", "value": 0, "children": []},
@@ -622,11 +655,12 @@ def main() -> int:
 
         payload = {
             "timestamp": args.timestamp,
-            "method": "bertopic+umap+hdbscan+ctfidf-bm25+reduce-frequent-words+representation+auto-reduction+outlier-reduction+hierarchy-v3",
+            "method": "bertopic+umap+hdbscan+ctfidf-bm25+reduce-frequent-words+representation+auto-reduction+outlier-reduction+hierarchy-v4",
             "pointCount": len(records),
             "clusterCount": len(finalized_clusters),
             "excludedCronChunks": excluded_cron_chunks,
             "excludedShortChunks": excluded_short_chunks,
+            "excludedDreamingChunks": excluded_dreaming_chunks,
             "clusters": [asdict(c) for c in finalized_clusters],
             "points": [
                 {
